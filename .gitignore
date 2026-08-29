@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# MLflow local store
+mlruns/
+mlflow.db
+
+# OS / editor
+.DS_Store
+.vscode/
+*.zip
