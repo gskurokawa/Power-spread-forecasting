@@ -6,6 +6,7 @@ pandas>=2.0
 numpy>=1.24
 scipy>=1.10
 xgboost>=2.0
+scikit-learn>=1.3      # xgboost's XGBRegressor (sklearn API) needs this present
 holidays>=0.40
 entsoe-py>=0.6
 SQLAlchemy>=2.0
