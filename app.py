@@ -12,6 +12,11 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Power Spread Forecasting", page_icon="⚡", layout="wide")
+st.markdown("""
+    <style>
+    .block-container { padding-top: 1rem; }
+    </style>
+""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- data source: Neon cloud Postgres, CSV fallback
 # When a [connections.neon] secret is set (Streamlit Secrets), the app reads live
@@ -68,11 +73,9 @@ VERDICT = {
 }
 
 # ----------------------------------------------------------------- header
-st.title("⚡ Forecasting European Power Price Spreads")
+st.title("⚡ DE-PL and DE-FR Day-Ahead Power Price Spread Forecasts")
 st.markdown(
-    "Day-ahead German–French and German–Polish price spreads, forecast with a leakage-safe, "
-    "walk-forward model. Below: the model's predictions against what actually happened, and its "
-    "forecast for the latest available day."
+    "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast with walk-forward machine learning models."
 )
 
 # ----------------------------------------------------------------- TOP: actual vs predicted + latest forecast
@@ -90,69 +93,62 @@ def spread_series(pred_df, sp, days):
 
 pred_df, pred_src = load_predictions()
 if pred_df is not None:
-    st.caption(f"Data source: **{pred_src}**")
-    days = st.slider("Days of history to show", min_value=14, max_value=180, value=60, step=7)
+    days = st.slider("Select days of history to show using the slider:", min_value=14, max_value=180, value=60, step=7)
     for sp in ["DE-PL", "DE-FR"]:
         chart, latest, last_day = spread_series(pred_df, sp, days)
         st.subheader(f"{sp} spread  ·  €/MWh")
         mcol, ccol = st.columns([1, 5])
-        mcol.metric("Latest daily forecast", f"{latest:+.1f} €/MWh")
-        mcol.caption(f"mean predicted spread for {last_day.date()} (most recent day)")
+        mcol.metric(f"Forecast for {(last_day + pd.Timedelta(days=1)).date()}", f"{latest:+.1f} €/MWh")
+        mcol.caption(f"Midnight-to-midnight mean predicted power price spread for the day after {last_day.date()}")
         ccol.line_chart(chart, height=260)
-    st.caption(
-        "The **forecast (latest day)** segment is the model's prediction for the most recent day "
-        "in the data. Once the live daily ENTSO-E pull is running, this point becomes tomorrow's "
-        "genuine day-ahead forecast — the rest of the code is unchanged."
-    )
+    st.caption(f"Data source: ENTSOE from **{pred_src}**")
 else:
     st.info("No predictions available yet — load `predictions` into Neon (or generate "
             "`predictions.csv` with `python spread_forecasting.py compare`), then reload.")
 
 st.divider()
 
-# ----------------------------------------------------------------- headline metrics
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Best DE-PL model", "14.40 €/MWh", "XGBoost · direct")
-c2.metric("vs LASSO", "−1.84 €/MWh", "p < 0.001", delta_color="inverse")
-c3.metric("vs differencing", "−2.23 €/MWh", "p < 0.001", delta_color="inverse")
-c4.metric("Test window", "2025–26", "walk-forward, out-of-sample")
-
-st.divider()
-
-# ----------------------------------------------------------------- interactive comparison
-st.header("Model comparison")
-spread = st.radio("Choose a spread", ["DE-PL", "DE-FR"], horizontal=True)
-
-sub = RESULTS[RESULTS["spread"] == spread].copy()
-sub["approach"] = sub["model"] + " · " + sub["form"]
-
-left, right = st.columns([3, 2])
-with left:
-    disp = sub.set_index("approach")[["MAE", "RMSE", "Sharpe"]]
-    styler = disp.style.format("{:.2f}").highlight_min(
-        subset=["MAE"], color="rgba(224,145,46,0.35)")
-    st.dataframe(styler, use_container_width=True)
-    st.caption(f"Persistence baseline (t−24h): {PERSISTENCE[spread]:.2f} €/MWh · lower MAE is better")
-with right:
-    st.bar_chart(sub.set_index("approach")["MAE"], height=280)
-
-st.info(VERDICT[spread])
-
-st.divider()
-
 # ----------------------------------------------------------------- SHAP interpretation (DE-PL)
-st.header("Why the DE-PL model works — SHAP")
-st.markdown(
-    "The **renewable forecasts** set the price level smoothly (merit order), while the "
-    "**cross-border coupling** variables act as sharp **thresholds** — the structure a linear "
-    "model cannot capture, and the reason the tree wins on DE-PL."
-)
+st.header("Machine Learning Drivers Summary")
 
-if os.path.exists("shap_ranking.csv"):
-    rank = pd.read_csv("shap_ranking.csv", index_col=0)
-    rank.columns = ["mean |SHAP| (€/MWh)"]
-    st.subheader("Top drivers")
-    st.dataframe(rank.head(10).style.format("{:.2f}"), use_container_width=True)
+# plain-English description of each model feature, shown next to its SHAP value
+DRIVER_DESC = {
+    "wind_solar_fc_DE": "Germany day-ahead wind + solar generation forecast",
+    "wind_solar_fc_FR": "France day-ahead wind + solar generation forecast",
+    "wind_solar_fc_PL": "Poland day-ahead wind + solar generation forecast",
+    "load_fc_DE": "Germany day-ahead load (demand) forecast",
+    "load_fc_FR": "France day-ahead load forecast",
+    "load_fc_PL": "Poland day-ahead load forecast",
+    "gen_fc_DE": "Germany day-ahead total generation forecast",
+    "gen_fc_FR": "France day-ahead total generation forecast",
+    "gen_fc_PL": "Poland day-ahead total generation forecast",
+    "net_pos_FR": "France day-ahead net position (net exports)",
+    "net_pos_PL": "Poland day-ahead net position (net exports)",
+    "outage_DE": "Germany generation capacity unavailable (outages)",
+    "outage_FR": "France generation capacity unavailable (outages)",
+    "outage_PL": "Poland generation capacity unavailable (outages)",
+    "sched_exch_DE_FR": "Scheduled day-ahead exchange, Germany–France",
+    "sched_exch_DE_NL": "Scheduled day-ahead exchange, Germany–Netherlands",
+    "sched_exch_DE_BE": "Scheduled day-ahead exchange, Germany–Belgium",
+    "sched_exch_DE_AT": "Scheduled day-ahead exchange, Germany–Austria",
+    "sched_exch_DE_CH": "Scheduled day-ahead exchange, Germany–Switzerland",
+    "sched_exch_DE_PL": "Scheduled day-ahead exchange, Germany–Poland",
+    "sched_exch_DE_CZ": "Scheduled day-ahead exchange, Germany–Czechia",
+    "sched_exch_DE_DK_1": "Scheduled day-ahead exchange, Germany–Denmark (DK1)",
+    "sched_exch_DE_DK_2": "Scheduled day-ahead exchange, Germany–Denmark (DK2)",
+    "sched_exch_DE_SE_4": "Scheduled day-ahead exchange, Germany–Sweden (SE4)",
+    "sched_exch_DE_NO_2": "Scheduled day-ahead exchange, Germany–Norway (NO2)",
+    "spread_DE_PL_lag24": "DE-PL spread 24 h earlier (previous day, same hour)",
+    "spread_DE_PL_lag48": "DE-PL spread 48 h earlier",
+    "spread_DE_PL_lag168": "DE-PL spread 168 h earlier (one week before)",
+    "is_weekend": "Weekend indicator (1 = Sat/Sun)",
+    "is_holiday_DE": "German public-holiday indicator",
+    "is_holiday_FR": "French public-holiday indicator",
+    "is_holiday_PL": "Polish public-holiday indicator",
+    "hour": "Hour of day (0–23)",
+    "dayofweek": "Day of week (0 = Monday)",
+    "month": "Month of year (1–12)",
+}
 
 def show_image(path, caption):
     if os.path.exists(path):
@@ -160,41 +156,40 @@ def show_image(path, caption):
     else:
         st.caption(f"⚠️ `{path}` not found — run `python spread_forecasting.py shap` to generate it.")
 
-ic1, ic2 = st.columns(2)
-with ic1:
-    show_image("shap_bar.png", "Global driver importance (mean |SHAP|).")
-with ic2:
-    show_image("shap_beeswarm.png", "Per-hour contributions, coloured by feature value.")
-
-st.subheader("Two thresholds")
-tc1, tc2 = st.columns(2)
-with tc1:
-    show_image("shap_dependence_net_pos_PL.png",
-               "Polish net position: a discontinuous jump as Poland turns net exporter.")
-with tc2:
-    show_image("shap_dependence_wind_solar_fc_DE.png",
-               "German renewables: a cliff near 55 GW, where German prices turn negative.")
+if os.path.exists("shap_ranking.csv"):
+    rank = pd.read_csv("shap_ranking.csv", index_col=0).head(10)
+    tbl = pd.DataFrame({
+        "Driver": rank.index,
+        "What it is": [DRIVER_DESC.get(f, "—") for f in rank.index],
+        "mean |SHAP| (€/MWh)": rank.iloc[:, 0].to_numpy(),
+    })
+    tcol, bcol = st.columns([5, 2])          # narrow table on the left, bar chart on the right
+    with tcol:
+        st.subheader("Top drivers")
+        st.dataframe(
+            tbl, hide_index=True, use_container_width=True,
+            column_config={
+                "mean |SHAP| (€/MWh)": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+    with bcol:
+        show_image("shap_bar.png", "Global driver importance (mean |SHAP|).")
+else:
+    st.caption("SHAP ranking not found — run `python spread_forecasting.py shap` to generate it.")
 
 st.divider()
 
 # ----------------------------------------------------------------- data download
-st.header("Get the data")
+st.header("Downloads")
 data_bytes, data_src = modelling_table_bytes()
 if data_bytes is not None:
-    st.download_button("⬇ Download the modelling table (CSV)", data_bytes,
+    st.download_button("⬇ Download all data (.csv)", data_bytes,
                        file_name="modelling_table.csv", mime="text/csv")
-    st.caption(f"~66,000 hourly rows · leakage-safe features for three bidding zones · source: {data_src}.")
 else:
     st.caption("No data available to download yet.")
 
-with st.expander("Method — how it was built"):
-    st.markdown(
-        "- **Data**: ENTSO-E day-ahead prices, forecasts, scheduled exchanges, net positions and "
-        "outages for DE-LU, FR, PL. PLN→EUR break and the 15-minute switch corrected.\n"
-        "- **Features**: leakage-safe only — day-ahead forecasts, scheduled flows, calendar, and "
-        "24/48/168h target lags. No realised prices, actuals or physical flows.\n"
-        "- **Models**: LASSO benchmark vs XGBoost tuned by Optuna (rolling-window CV, tracked in MLflow).\n"
-        "- **Evaluation**: rolling two-year window, retrained monthly, tested once on 2025+; "
-        "MAE / RMSE / Sharpe with Diebold–Mariano significance tests.")
+st.download_button("⬇ Download model documentation (.md)", data_bytes,
+                    file_name="Documentation.md", mime="text/markdown")
 
-st.caption("Portfolio project · data © ENTSO-E Transparency Platform · not investment advice.")
+st.caption("Github page: https://github.com/gskurokawa/Power-spread-forecasting")
+
