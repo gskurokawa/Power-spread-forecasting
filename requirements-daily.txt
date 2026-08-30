@@ -1,0 +1,13 @@
+# Packages the automated daily job installs on a fresh GitHub Actions runner.
+# Kept separate from the Streamlit app's requirements.txt (which only needs the
+# dashboard's packages). Minimum versions, not hard pins, so security patches
+# still flow; pin exact versions if you want fully reproducible runs.
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+xgboost>=2.0
+holidays>=0.40
+entsoe-py>=0.6
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0

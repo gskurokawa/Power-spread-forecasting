@@ -1,0 +1,47 @@
+name: Daily spread update
+
+# WHEN this runs.
+on:
+  # Scheduled: 13:00 UTC, Monday–Friday. That's after the European day-ahead
+  # auction publishes (~12:45 CET) in both winter (14:00 CET) and summer
+  # (15:00 CEST). Cron is always UTC and ignores daylight saving, so we pick a
+  # time that stays safely after the auction year-round.
+  # Weekdays only: ENTSO-E is flakiest at weekends, and the updater's 10-day
+  # buffer means Monday's run re-fetches and fills in Saturday/Sunday anyway.
+  schedule:
+    - cron: "0 13 * * 1-5"
+  # Manual button in the Actions tab — use this to test on demand.
+  workflow_dispatch:
+
+# Never let two runs overlap (a slow run must finish before the next starts).
+concurrency:
+  group: daily-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45            # ENTSO-E can be slow; don't hang forever
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-daily.txt
+
+      - name: Run the daily update
+        env:
+          # These come from the repo's encrypted secrets (Settings -> Secrets and
+          # variables -> Actions). They are injected as environment variables,
+          # exactly like your local .env — never written to the repo.
+          ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python daily_update.py --lean
