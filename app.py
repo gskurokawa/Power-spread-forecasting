@@ -21,11 +21,17 @@ def load_predictions():
         conn = st.connection("neon", type="sql")
         df = conn.query("SELECT timestamp, spread, actual, predicted FROM predictions", ttl="1h")
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df, "Neon · cloud Postgres"
+        return _norm_spread(df), "Neon · cloud Postgres"
     except Exception:
         if os.path.exists("predictions.csv"):
-            return pd.read_csv("predictions.csv", parse_dates=["timestamp"]), "local CSV (fallback)"
+            return _norm_spread(pd.read_csv("predictions.csv", parse_dates=["timestamp"])), "local CSV (fallback)"
         return None, None
+
+# accept either the short dashboard labels ("DE-PL") or the raw column names
+# ("spread_DE_PL") in the predictions table, so old and new data both chart.
+def _norm_spread(df):
+    df["spread"] = df["spread"].replace({"spread_DE_PL": "DE-PL", "spread_DE_FR": "DE-FR"})
+    return df
 
 def modelling_table_bytes():
     try:
