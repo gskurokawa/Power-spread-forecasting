@@ -13,6 +13,31 @@ import streamlit as st
 
 st.set_page_config(page_title="Power Spread Forecasting", page_icon="⚡", layout="wide")
 
+# ----------------------------------------------------------------- data source: Neon cloud Postgres, CSV fallback
+# When a [connections.neon] secret is set (Streamlit Secrets), the app reads live
+# data from Neon. Otherwise it falls back to the committed CSVs, so it always works.
+def load_predictions():
+    try:
+        conn = st.connection("neon", type="sql")
+        df = conn.query("SELECT timestamp, spread, actual, predicted FROM predictions", ttl="1h")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df, "Neon · cloud Postgres"
+    except Exception:
+        if os.path.exists("predictions.csv"):
+            return pd.read_csv("predictions.csv", parse_dates=["timestamp"]), "local CSV (fallback)"
+        return None, None
+
+def modelling_table_bytes():
+    try:
+        conn = st.connection("neon", type="sql")
+        data = conn.query("SELECT * FROM modelling_table", ttl="1h").to_csv(index=False).encode()
+        return data, "Neon · cloud Postgres"
+    except Exception:
+        if os.path.exists("modelling_table.csv"):
+            with open("modelling_table.csv", "rb") as f:
+                return f.read(), "local file"
+        return None, None
+
 # ----------------------------------------------------------------- results (final walk-forward, 2025+)
 RESULTS = pd.DataFrame(
     [("DE-PL", "LASSO", "direct", 16.24, 25.59, 15.52),
@@ -57,8 +82,9 @@ def spread_series(pred_df, sp, days):
     latest_mean = float(d.loc[is_last, "predicted"].mean())
     return chart, latest_mean, last_day
 
-if os.path.exists("predictions.csv"):
-    pred_df = pd.read_csv("predictions.csv", parse_dates=["timestamp"])
+pred_df, pred_src = load_predictions()
+if pred_df is not None:
+    st.caption(f"Data source: **{pred_src}**")
     days = st.slider("Days of history to show", min_value=14, max_value=180, value=60, step=7)
     for sp in ["DE-PL", "DE-FR"]:
         chart, latest, last_day = spread_series(pred_df, sp, days)
@@ -73,8 +99,8 @@ if os.path.exists("predictions.csv"):
         "genuine day-ahead forecast — the rest of the code is unchanged."
     )
 else:
-    st.info("No predictions yet — run `python spread_forecasting.py compare` to generate "
-            "`predictions.csv`, then reload this page.")
+    st.info("No predictions available yet — load `predictions` into Neon (or generate "
+            "`predictions.csv` with `python spread_forecasting.py compare`), then reload.")
 
 st.divider()
 
@@ -147,13 +173,13 @@ st.divider()
 
 # ----------------------------------------------------------------- data download
 st.header("Get the data")
-if os.path.exists("modelling_table.csv"):
-    with open("modelling_table.csv", "rb") as f:
-        st.download_button("⬇ Download the modelling table (CSV)", f,
-                           file_name="modelling_table.csv", mime="text/csv")
-    st.caption("~66,000 hourly rows, Dec 2018 – Jul 2026, leakage-safe features for three bidding zones.")
+data_bytes, data_src = modelling_table_bytes()
+if data_bytes is not None:
+    st.download_button("⬇ Download the modelling table (CSV)", data_bytes,
+                       file_name="modelling_table.csv", mime="text/csv")
+    st.caption(f"~66,000 hourly rows · leakage-safe features for three bidding zones · source: {data_src}.")
 else:
-    st.caption("Place `modelling_table.csv` beside this app to enable the download button.")
+    st.caption("No data available to download yet.")
 
 with st.expander("Method — how it was built"):
     st.markdown(

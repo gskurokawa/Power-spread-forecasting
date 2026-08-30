@@ -4,6 +4,11 @@ __pycache__/
 .venv/
 venv/
 
+# API keys and connection strings
+.env
+*.env
+.streamlit/secrets.toml
+
 # MLflow local store
 mlruns/
 mlflow.db
