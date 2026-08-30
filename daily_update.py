@@ -1,28 +1,32 @@
 """
-daily_update.py — Phase 2 (option a): "latest-available-day refresh".
+daily_update.py — operational pre-auction forward forecast.
 
-WHAT IT DOES, ONCE PER DAY
---------------------------
+WHAT IT DOES, ONCE PER DAY (run in the morning, BEFORE the noon gate closure)
+-----------------------------------------------------------------------------
 1. Look at the cloud database (Neon) and find the newest hour we already have.
 2. Re-pull a SHORT recent window from ENTSO-E (a few days back, through
-   tomorrow) — short because ENTSO-E keeps revising the last few days
-   (load actuals, outages, generation), and because tomorrow's day-ahead
-   auction result appears around 12:45 CET.
+   tomorrow). Short because ENTSO-E keeps revising the last few days (load
+   actuals, outages, generation). The window reaches into tomorrow so that
+   tomorrow's day-ahead forecasts (load, wind-solar, generation), which
+   publish the evening/morning before, are included.
 3. Rebuild those hours into the exact modelling-table schema, reusing the
    SAME transform logic as the historical build (build_modelling_table.build).
 4. UPSERT that window into Neon: replace the overlapping recent rows (to pick
    up ENTSO-E's revisions) and append the genuinely new ones. Older history
    is left untouched.
 5. Retrain the tuned XGBoost on the trailing two years and write fresh
-   predictions for the new rows into the `predictions` table, so the
-   dashboard's "latest available day" is always current.
+   predictions for the new rows into the `predictions` table.
 
-WHY "option a": we predict whatever the freshest published day-ahead data is.
-Because the day-ahead auction for tomorrow clears today, tomorrow's spread is
-already known once the auction publishes — so every new row has both an
-`actual` and a `predicted`. Option (b) — a genuine pre-auction forward
-forecast — is a later refinement; the fetch/transform/upsert plumbing here is
-exactly what (b) would reuse.
+OPERATIONAL (pre-auction) MODEL. This job runs the pre-auction feature set
+(spread_forecasting.PRE_AUCTION = True, set below): it drops the auction-outcome
+inputs (scheduled cross-border exchanges and net positions), which only publish
+with the price at ~12:45 CET. Because the model uses only inputs known before
+the auction, it can forecast a delivery day whose auction has NOT yet cleared,
+so the forward row is written with `predicted` set and `actual` still NULL. The
+actual is filled in automatically on a later run, once the auction has cleared
+and the 10-day refetch window sweeps back over that day. Run this job in the
+morning, before gate closure, so the forward forecast genuinely precedes the
+market.
 
 RUN IT LOCALLY FIRST (never straight into the scheduled job):
 
@@ -51,11 +55,17 @@ from sqlalchemy import create_engine, text
 
 # reuse the well-tested transform + the model/feature definitions -----------
 import build_modelling_table as bmt
+import spread_forecasting as sf
 from spread_forecasting import (
     num_features, add_lags, xgb_estimator, load_data,
     BIN, CAT, BEST_JSON, DIFF_MAP,
 )
 import json
+
+# operational model: forecast with pre-auction inputs only. This drops the
+# auction-outcome features (scheduled exchanges + net positions) everywhere
+# num_features is called below, so the model can run before the auction clears.
+sf.PRE_AUCTION = True
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -70,7 +80,8 @@ SPREADS = ["spread_DE_PL", "spread_DE_FR"]
 SHORT_LABEL = {"spread_DE_PL": "DE-PL", "spread_DE_FR": "DE-FR"}
 
 DEFAULT_BUFFER_DAYS = 10   # how far back to refetch, to absorb ENTSO-E revisions
-FORWARD_DAYS = 2           # fetch through tomorrow (+ a margin) for the new day-ahead
+FORWARD_DAYS = 2           # reach into tomorrow so its pre-auction day-ahead forecasts
+                           # are fetched and the forward (no-actual) row can be predicted
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +343,9 @@ def predict_new_rows(full_df, target, best, pred_from):
 
 def build_prediction_rows(full_df, best, pred_from):
     """Tidy predictions frame (spread, timestamp, actual, predicted) for the new
-    window, one block per spread, using the winning model (XGBoost direct)."""
+    window, one block per spread, using the operational pre-auction XGBoost direct
+    model. Forward rows whose auction has not cleared carry a prediction with the
+    `actual` left NaN (written to Neon as NULL), which backfills on a later run."""
     blocks = []
     for target in SPREADS:
         pred = predict_new_rows(full_df, target, best, pred_from)

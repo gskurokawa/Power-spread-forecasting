@@ -19,14 +19,20 @@ Pick a stage:
   python spread_forecasting.py shap         SHAP interpretation of the winning DE-PL model
                                             (bar, beeswarm, dependence plots, ranking CSV)
 
-Common option: --csv PATH  (default modelling_table.csv, the full 51-column table)
+Common options:
+  --csv PATH       default modelling_table.csv, the full 51-column table
+  --pre-auction    operational model: drop the auction-outcome features (scheduled
+                   exchanges and net positions, which publish ~12:45 with the price),
+                   so the model forecasts BEFORE the auction clears. Every stage then
+                   reads/writes '*_preauction' artifacts, leaving the full-model files
+                   untouched.
 
 Heavy libraries are imported lazily inside the stages that need them, so the
 `lasso` and `dm` stages run with only pandas/numpy/scipy/scikit-learn installed;
 `xgb-manual`/`optuna`/`compare` additionally need xgboost (and optuna/mlflow),
 and `shap` needs xgboost + shap + matplotlib.
 """
-import argparse, json, warnings
+import argparse, json, os, warnings
 import numpy as np, pandas as pd
 from scipy import stats
 warnings.filterwarnings("ignore")
@@ -49,6 +55,38 @@ CAT = ["hour", "dayofweek", "month"]
 XGB_FIXED = dict(objective="reg:squarederror", eval_metric="mae", tree_method="hist",
                  n_jobs=-1, random_state=0)
 
+# ---- pre-auction (operational) mode --------------------------------------------
+# Scheduled cross-border exchanges (sched_exch_DE_*) and net positions (net_pos_*)
+# are day-ahead market-COUPLING outputs: they publish together with the price
+# (~12:45), so any model using them can never forecast AHEAD of the auction.
+# --pre-auction drops them, leaving only inputs known before gate closure
+# (load / wind-solar / generation forecasts, outages, target lags, calendar). This
+# is the operational model; the full model keeps them as a same-time benchmark.
+AUCTION_OUTCOME_PREFIXES = ("sched_exch_DE_", "net_pos_")
+PRE_AUCTION = False        # set by --pre-auction in main()
+
+def _tag():
+    return "_preauction" if PRE_AUCTION else ""
+
+def out_name(base):
+    """Tag output filenames in pre-auction mode so they never clobber the
+    full-model artifacts (wf_errors.csv, predictions.csv, shap_*.png, ...)."""
+    root, dot, ext = base.rpartition(".")
+    return f"{root}{_tag()}{dot}{ext}" if dot else base + _tag()
+
+def best_params_path():
+    return f"xgb_best_params_DEPL{_tag()}.json"
+
+def load_best():
+    """XGBoost hyperparameters. In pre-auction mode prefer a pre-auction-tuned file
+    if present, else reuse the full-model params (Section 6 found a hard accuracy
+    floor, so re-tuning barely moves the result)."""
+    path = best_params_path()
+    if PRE_AUCTION and not os.path.exists(path):
+        print(f"  [pre-auction] {path} not found -> reusing full-model params '{BEST_JSON}'")
+        path = BEST_JSON
+    return json.load(open(path))
+
 # ------------------------------------------------------------------ data / features
 def load_data(csv):
     df = pd.read_csv(csv, index_col=0)
@@ -57,7 +95,10 @@ def load_data(csv):
 
 def num_features(df):
     sched = [c for c in df.columns if c.startswith("sched_exch_DE_")]
-    return FC + ["outage_DE", "outage_FR", "outage_PL"] + sched + ["net_pos_FR", "net_pos_PL"]
+    feats = FC + ["outage_DE", "outage_FR", "outage_PL"] + sched + ["net_pos_FR", "net_pos_PL"]
+    if PRE_AUCTION:                       # operational model: drop auction-outcome inputs
+        feats = [c for c in feats if not c.startswith(AUCTION_OUTCOME_PREFIXES)]
+    return feats
 
 def add_lags(df, target):
     d = df.copy(); lags = []
@@ -257,12 +298,12 @@ def stage_optuna(df, args):
         study.optimize(objective, n_trials=args.trials)
     print(f"\nbest CV MAE {study.best_value:.3f}   params {study.best_params}")
     json.dump({**study.best_params, "n_estimators": 2000, "early_stopping_rounds": 50},
-              open(BEST_JSON, "w"), indent=2)
-    print(f"saved -> {BEST_JSON}")
+              open(best_params_path(), "w"), indent=2)
+    print(f"saved -> {best_params_path()}")
 
 
 def stage_compare(df):
-    best = json.load(open(BEST_JSON))
+    best = load_best()
     print(f"tuned XGBoost params: {best}\nwalk-forward (both models, 5 targets) ...")
     pred = {}
     for model in ["lasso", "xgb"]:
@@ -290,19 +331,20 @@ def stage_compare(df):
             cols["_idx"] = idx; cols["_act"] = act.to_numpy()
         saved[sp] = pd.DataFrame({k: v for k, v in cols.items() if not k.startswith("_")},
                                  index=cols["_idx"])
-    pd.concat(saved, names=["spread"]).to_csv(ERRORS_CSV)
-    print(f"\n[saved {ERRORS_CSV} for the DM stage]")
+    pd.concat(saved, names=["spread"]).to_csv(out_name(ERRORS_CSV))
+    print(f"\n[saved {out_name(ERRORS_CSV)} for the DM stage]")
 
     # tidy actual-vs-predicted series for the dashboard (winning model: XGBoost direct)
+    short = {"spread_DE_FR": "DE-FR", "spread_DE_PL": "DE-PL"}   # labels the dashboard filters on
     prows = []
     for sp in SPREADS:
         s = pred[("xgb", sp)]
         idx = s.index[s.index.year >= 2025]
-        prows.append(pd.DataFrame({"spread": sp, "actual": df.loc[idx, sp].values,
+        prows.append(pd.DataFrame({"spread": short[sp], "actual": df.loc[idx, sp].values,
                                    "predicted": s.loc[idx].values}, index=idx))
     out = pd.concat(prows); out.index.name = "timestamp"
-    out.to_csv("predictions.csv")
-    print("[saved predictions.csv for the dashboard]")
+    out.to_csv(out_name("predictions.csv"))
+    print(f"[saved {out_name('predictions.csv')} for the dashboard]")
 
 
 def stage_shap(df, args):
@@ -314,7 +356,7 @@ def stage_shap(df, args):
     import matplotlib.pyplot as plt
     import xgboost as xgb
     target = args.target
-    best = {k: v for k, v in json.load(open(BEST_JSON)).items() if k != "early_stopping_rounds"}
+    best = {k: v for k, v in load_best().items() if k != "early_stopping_rounds"}
     d, lags = add_lags(df, target)
     feats = num_features(df) + lags + BIN + CAT          # CAT kept as integers here
     tr = d[(d.index >= "2023-01-01") & (d.index < "2024-11-01")].dropna(subset=feats + [target])
@@ -325,29 +367,31 @@ def stage_shap(df, args):
                              objective="reg:squarederror", tree_method="hist",
                              enable_categorical=False, n_jobs=-1, random_state=0)
     model.fit(tr[feats], tr[target], eval_set=[(es[feats], es[target])], verbose=False)
-    print(f"explanatory model test MAE {mae(te[target], model.predict(te[feats])):.2f}  (walk-forward ~14.4)")
+    hint = "  (pre-auction model)" if PRE_AUCTION else "  (walk-forward ~14.4)"
+    print(f"explanatory model test MAE {mae(te[target], model.predict(te[feats])):.2f}{hint}")
 
     expl = shap.TreeExplainer(model)
     sv = expl(te[feats])
     rank = pd.Series(np.abs(sv.values).mean(0), index=feats).sort_values(ascending=False)
-    rank.to_csv("shap_ranking.csv", header=["mean_abs_shap"])
+    rank.to_csv(out_name("shap_ranking.csv"), header=["mean_abs_shap"])
     print("\ntop 12 drivers (mean |SHAP|, EUR/MWh):")
     for nm, v in rank.head(12).items():
         print(f"  {v:6.3f}  {nm}")
 
     plt.figure(); shap.plots.bar(sv, max_display=15, show=False)
-    plt.tight_layout(); plt.savefig("shap_bar.png", dpi=140, bbox_inches="tight"); plt.close()
+    plt.tight_layout(); plt.savefig(out_name("shap_bar.png"), dpi=140, bbox_inches="tight"); plt.close()
     plt.figure(); shap.plots.beeswarm(sv, max_display=15, show=False)
-    plt.tight_layout(); plt.savefig("shap_beeswarm.png", dpi=140, bbox_inches="tight"); plt.close()
+    plt.tight_layout(); plt.savefig(out_name("shap_beeswarm.png"), dpi=140, bbox_inches="tight"); plt.close()
     for feat in rank.head(4).index:
         plt.figure(); shap.plots.scatter(sv[:, feat], show=False)
         plt.tight_layout()
-        plt.savefig(f"shap_dependence_{feat.replace('/', '_')}.png", dpi=140, bbox_inches="tight"); plt.close()
-    print("\nsaved: shap_bar.png, shap_beeswarm.png, shap_dependence_*.png, shap_ranking.csv")
+        plt.savefig(out_name(f"shap_dependence_{feat.replace('/', '_')}.png"), dpi=140, bbox_inches="tight"); plt.close()
+    print(f"\nsaved: {out_name('shap_bar.png')}, {out_name('shap_beeswarm.png')}, "
+          f"{out_name('shap_dependence_*.png')}, {out_name('shap_ranking.csv')}")
 
 
 def stage_dm(df=None):
-    err = pd.read_csv(ERRORS_CSV).rename(columns={"Unnamed: 1": "ts"})
+    err = pd.read_csv(out_name(ERRORS_CSV)).rename(columns={"Unnamed: 1": "ts"})
     print("Diebold-Mariano tests  (HAC bandwidth sweep; d<0 => first model better)")
     print("=" * 74)
     for sp in SPREADS:
@@ -368,6 +412,10 @@ def main():
     ap = argparse.ArgumentParser(description="Spread forecasting pipeline")
     ap.add_argument("stage", choices=["lasso", "xgb-manual", "optuna", "compare", "dm", "shap"])
     ap.add_argument("--csv", default="modelling_table.csv")
+    ap.add_argument("--pre-auction", dest="pre_auction", action="store_true",
+                    help="operational mode: drop auction-outcome features (scheduled "
+                         "exchanges, net positions) so the model forecasts BEFORE the "
+                         "auction clears; outputs are written to '*_preauction' files")
     ap.add_argument("--target", default="spread_DE_PL")
     ap.add_argument("--trials", type=int, default=60)
     ap.add_argument("--mlflow", action="store_true")
@@ -381,6 +429,15 @@ def main():
     ap.add_argument("--gamma", type=float, default=0.0)
     ap.add_argument("--n-estimators", dest="n_estimators", type=int, default=1000)
     args = ap.parse_args()
+
+    global PRE_AUCTION
+    PRE_AUCTION = args.pre_auction
+    if PRE_AUCTION:
+        print("=" * 66)
+        print("PRE-AUCTION (operational) mode: dropping auction-outcome features")
+        print(f"  excluded prefixes : {', '.join(AUCTION_OUTCOME_PREFIXES)}")
+        print("  outputs tagged '_preauction' (full-model files left untouched)")
+        print("=" * 66)
 
     if args.stage == "dm":
         stage_dm(); return

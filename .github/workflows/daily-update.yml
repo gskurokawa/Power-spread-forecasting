@@ -2,14 +2,24 @@ name: Daily spread update
 
 # WHEN this runs.
 on:
-  # Scheduled: 13:00 UTC, Monday–Friday. That's after the European day-ahead
-  # auction publishes (~12:45 CET) in both winter (14:00 CET) and summer
-  # (15:00 CEST). Cron is always UTC and ignores daylight saving, so we pick a
-  # time that stays safely after the auction year-round.
-  # Weekdays only: ENTSO-E is flakiest at weekends, and the updater's 10-day
-  # buffer means Monday's run re-fetches and fills in Saturday/Sunday anyway.
+  # Scheduled: 08:00 UTC, every day. The operational model forecasts BEFORE the
+  # day-ahead auction, so this must run ahead of gate closure (noon local time):
+  # 08:00 UTC is 10:00 CEST in summer and 09:00 CET in winter, comfortably before
+  # the ~10:00 UTC (summer) / 11:00 UTC (winter) gate closure year-round. With the
+  # 45-minute timeout below, a run started at 08:00 UTC always finishes before the
+  # auction clears, so the forecast it writes genuinely precedes the market.
+  #
+  # Every day, not just weekdays: the day-ahead auction runs 7 days a week, so a
+  # weekend forecast is a real forecast. ENTSO-E is flakier at weekends, but the
+  # fetch retries and the updater's 10-day refetch buffer absorb transient misses,
+  # and yesterday's still-NULL actual is backfilled once its auction has cleared.
+  #
+  # Note: this yields a true next-day (no-actual) forecast only when ENTSO-E has
+  # already published tomorrow's day-ahead forecasts by run time. When it has not,
+  # the run forecasts up to today and tomorrow is picked up on a later run; the
+  # 10-day refetch means nothing is lost either way.
   schedule:
-    - cron: "0 13 * * 1-5"
+    - cron: "0 8 * * *"
   # Manual button in the Actions tab — use this to test on demand.
   workflow_dispatch:
 

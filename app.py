@@ -49,33 +49,35 @@ def modelling_table_bytes():
                 return f.read(), "local file"
         return None, None
 
-# ----------------------------------------------------------------- results (final walk-forward, 2025+)
+# ----------------------------------------------------------------- results (operational pre-auction walk-forward, 2025+)
 RESULTS = pd.DataFrame(
-    [("DE-PL", "LASSO", "direct", 16.24, 25.59, 15.52),
-     ("DE-PL", "LASSO", "differenced", 17.07, 26.12, 14.34),
-     ("DE-PL", "XGBoost", "direct", 14.40, 25.43, 15.75),
-     ("DE-PL", "XGBoost", "differenced", 16.63, 25.99, 15.32),
-     ("DE-FR", "LASSO", "direct", 19.21, 26.59, 24.19),
-     ("DE-FR", "LASSO", "differenced", 18.85, 26.30, 24.08),
-     ("DE-FR", "XGBoost", "direct", 19.17, 27.52, 24.01),
-     ("DE-FR", "XGBoost", "differenced", 20.59, 28.78, 21.65)],
-    columns=["spread", "model", "form", "MAE", "RMSE", "Sharpe"])
+    [("DE-PL", "LASSO", "direct", 16.39, 25.82),
+     ("DE-PL", "LASSO", "differenced", 17.10, 26.03),
+     ("DE-PL", "XGBoost", "direct", 15.39, 26.76),
+     ("DE-PL", "XGBoost", "differenced", 16.26, 25.72),
+     ("DE-FR", "LASSO", "direct", 19.42, 26.83),
+     ("DE-FR", "LASSO", "differenced", 19.30, 27.16),
+     ("DE-FR", "XGBoost", "direct", 19.28, 27.20),
+     ("DE-FR", "XGBoost", "differenced", 19.98, 27.92)],
+    columns=["spread", "model", "form", "MAE", "RMSE"])
 
-PERSISTENCE = {"DE-PL": 22.05, "DE-FR": 24.37}
+PERSISTENCE = {"DE-PL": 22.03, "DE-FR": 24.35}
 VERDICT = {
     "DE-PL": ("**Congestion-prone border — modelling choices matter.** The tuned XGBoost "
-              "on the spread directly is the best model (14.40 €/MWh). It beats LASSO by "
-              "1.84 €/MWh and beats differencing two price forecasts by 2.23 €/MWh — both "
-              "significant at p < 0.001 (Diebold–Mariano, robust to a two-week HAC bandwidth)."),
+              "on the spread directly is the best operational model (15.39 €/MWh). It beats "
+              "LASSO by 1.00 €/MWh and differencing by 0.87 €/MWh, both significant "
+              "(Diebold–Mariano, robust to a two-week HAC bandwidth). An oracle that could also "
+              "see the auction's own outputs would reach 14.40, so forecasting ahead of the "
+              "auction costs about €1/MWh."),
     "DE-FR": ("**Well-coupled border — nothing wins.** All four approaches land near 19 €/MWh, "
-              "and no difference is statistically significant (p ≈ 0.9 for XGBoost vs LASSO). "
-              "Differencing two clean price forecasts loses nothing here."),
+              "and no difference is statistically significant. Differencing two clean price "
+              "forecasts loses nothing here."),
 }
 
 # ----------------------------------------------------------------- header
 st.title("⚡ DE-PL and DE-FR Day-Ahead Power Price Spread Forecasts")
 st.markdown(
-    "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast with walk-forward machine learning models."
+    "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast before each day's auction with walk-forward machine-learning models."
 )
 
 # ----------------------------------------------------------------- TOP: actual vs predicted + latest forecast
@@ -89,17 +91,23 @@ def spread_series(pred_df, sp, days):
     chart["predicted"] = d["predicted"].where(~is_last)
     chart["forecast (latest day)"] = d["predicted"].where(is_last)
     latest_mean = float(d.loc[is_last, "predicted"].mean())
-    return chart, latest_mean, last_day
+    latest_has_actual = bool(d.loc[is_last, "actual"].notna().any())
+    return chart, latest_mean, last_day, latest_has_actual
 
 pred_df, pred_src = load_predictions()
 if pred_df is not None:
     days = st.slider("Select days of history to show using the slider:", min_value=14, max_value=180, value=60, step=7)
     for sp in ["DE-PL", "DE-FR"]:
-        chart, latest, last_day = spread_series(pred_df, sp, days)
+        chart, latest, last_day, has_actual = spread_series(pred_df, sp, days)
         st.subheader(f"{sp} spread  ·  €/MWh")
         mcol, ccol = st.columns([1, 5])
-        mcol.metric(f"Forecast for {(last_day + pd.Timedelta(days=1)).date()}", f"{latest:+.1f} €/MWh")
-        mcol.caption(f"Midnight-to-midnight mean predicted power price spread for the day after {last_day.date()}")
+        mcol.metric(f"Forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
+        if has_actual:
+            mcol.caption(f"Midnight-to-midnight mean predicted spread for {last_day.date()} "
+                         "(the auction has cleared, so the actual is shown alongside)")
+        else:
+            mcol.caption(f"Pre-auction forecast for {last_day.date()}; the actual fills in "
+                         "once the day-ahead auction clears")
         ccol.line_chart(chart, height=260)
     st.caption(f"Data source: ENTSOE from **{pred_src}**")
 else:
@@ -154,10 +162,10 @@ def show_image(path, caption):
     if os.path.exists(path):
         st.image(path, caption=caption, use_container_width=True)
     else:
-        st.caption(f"⚠️ `{path}` not found — run `python spread_forecasting.py shap` to generate it.")
+        st.caption(f"⚠️ `{path}` not found — run `python spread_forecasting.py shap --pre-auction` to generate it.")
 
-if os.path.exists("shap_ranking.csv"):
-    rank = pd.read_csv("shap_ranking.csv", index_col=0).head(10)
+if os.path.exists("shap_ranking_preauction.csv"):
+    rank = pd.read_csv("shap_ranking_preauction.csv", index_col=0).head(10)
     tbl = pd.DataFrame({
         "Driver": rank.index,
         "What it is": [DRIVER_DESC.get(f, "—") for f in rank.index],
@@ -173,9 +181,9 @@ if os.path.exists("shap_ranking.csv"):
             },
         )
     with bcol:
-        show_image("shap_bar.png", "Global driver importance (mean |SHAP|).")
+        show_image("shap_bar_preauction.png", "Global driver importance (mean |SHAP|).")
 else:
-    st.caption("SHAP ranking not found — run `python spread_forecasting.py shap` to generate it.")
+    st.caption("SHAP ranking not found — run `python spread_forecasting.py shap --pre-auction` to generate it.")
 
 st.divider()
 
@@ -188,8 +196,13 @@ if data_bytes is not None:
 else:
     st.caption("No data available to download yet.")
 
-st.download_button("⬇ Download model documentation (.md)", data_bytes,
-                    file_name="Documentation.md", mime="text/markdown")
+DOC_FILE = "Documentation.md"
+if os.path.exists(DOC_FILE):
+    with open(DOC_FILE, "rb") as f:      # read the markdown itself, not the data CSV
+        st.download_button("⬇ Download model documentation (.md)", f.read(),
+                           file_name="Documentation.md", mime="text/markdown")
+else:
+    st.caption(f"`{DOC_FILE}` not found — add your write-up to the repo under that name.")
 
 st.caption("Github page: https://github.com/gskurokawa/Power-spread-forecasting")
 
