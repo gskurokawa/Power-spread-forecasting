@@ -93,7 +93,7 @@ VERDICT = {
 }
 
 # ----------------------------------------------------------------- header
-st.title("⚡ DE-PL and DE-FR Day-Ahead Power Price Spread Forecasts")
+st.title("⚡ Forecasts of Selected European Power Price Spreads")
 st.markdown(
     "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast before each day's auction with walk-forward machine-learning models."
 )
@@ -138,20 +138,13 @@ if pred_df is not None:
     for sp in ["DE-PL", "DE-FR"]:
         a, b, la, lb = PAIR[sp]
         chart, latest, last_day, has_actual, cutoff, actual_end = spread_series(pred_df, sp)
+        fmade = (last_day - pd.Timedelta(days=1)).date()   # forecast is made the day before delivery
 
         st.subheader(f"{sp}  ·  €/MWh")
-        mcol, ccol = st.columns([1, 4])
-        mcol.metric(f"Forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
-        if has_actual:
-            ccol.caption(f"Midnight-to-midnight mean predicted spread for {last_day.date()} "
-                         "(the auction has cleared, so the actual is shown alongside).")
-        else:
-            ccol.caption(f"Pre-auction forecast for {last_day.date()}; the actual fills in "
-                         "once the day-ahead auction clears.")
-
         scol, pcol = st.columns(2)
         with scol:
-            st.markdown("**Spread — actual vs forecast**")
+            st.markdown(f"**Power price spread ({la} minus {lb}) — actual vs forecast "
+                        f"(midnight-to-midnight of the day after {fmade})**")
             # columns are ["actual", "forecast"] -> light grey actual, red forecast
             st.line_chart(chart, height=280, color=["#b0b0b0", "#d62728"])
         with pcol:
@@ -224,7 +217,7 @@ if os.path.exists("shap_ranking_preauction.csv"):
     })                                        # magnitude column dropped — the bar chart shows it
     tcol, bcol = st.columns([5, 2])          # table on the left, bar chart on the right
     with tcol:
-        st.subheader("Top drivers")
+        st.subheader("Top drivers — based on early-2025 to mid-2026 OOS data with training window 2023-2024")
         st.dataframe(tbl, hide_index=True, use_container_width=True)
     with bcol:
         show_image("shap_bar_preauction.png", "Global driver importance (mean |SHAP|).")
