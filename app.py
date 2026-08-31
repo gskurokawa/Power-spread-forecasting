@@ -235,11 +235,11 @@ if data_bytes is not None:
 else:
     st.caption("No data available to download yet.")
 
-DOC_FILE = "Documentation.md"
+DOC_FILE = "Power_spreads_paper.pdf"
 if os.path.exists(DOC_FILE):
     with open(DOC_FILE, "rb") as f:      # read the markdown itself, not the data CSV
-        st.download_button("⬇ Download model documentation (.md)", f.read(),
-                           file_name="Documentation.md", mime="text/markdown")
+        st.download_button("⬇ Download model paper (.pdf)", f.read(),
+                           file_name="Power_spreads_paper.pdf", mime="application/PDF")
 else:
     st.caption(f"`{DOC_FILE}` not found — add your write-up to the repo under that name.")
 
