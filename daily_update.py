@@ -109,24 +109,34 @@ def load_env():
 def entsoe_reachable(api_key, probes=3):
     """Quick pre-flight so a total ENTSO-E outage aborts in seconds instead of
     grinding every endpoint's retries for ~25 minutes. Fires a few tiny day-ahead
-    price probes with NO retries; returns True the moment one responds (a 'no data'
-    reply still means the server is up), and False only if every probe hits a
-    server-unavailable error (503 / 502 / 504 / timeout / connection)."""
+    price probes and treats the platform as UP only on a genuine response (or
+    ENTSO-E's own 'no data' signal), and as DOWN on anything else (503, timeout,
+    unexpected error). So an outage reliably trips the breaker and an odd error
+    fails safe to a skip rather than a false 'up'.
+
+    NOTE: retry_count MUST be >= 1. With retry_count=0 the entsoe client makes no
+    request at all, so the probe silently 'passes' without ever contacting the
+    server -- which is exactly the bug this replaces."""
     from entsoe import EntsoePandasClient
-    client = EntsoePandasClient(api_key=api_key, retry_count=0, timeout=20)
+    try:
+        from entsoe.exceptions import NoMatchingDataError
+    except Exception:
+        NoMatchingDataError = ()              # if unavailable, fall through to Exception
+    client = EntsoePandasClient(api_key=api_key, retry_count=2, retry_delay=0, timeout=15)
     end = pd.Timestamp.now(tz="UTC")
     start = end - pd.Timedelta(days=1)
-    DOWN = ("503", "502", "504", "timed out", "timeout", "connection", "temporarily")
     for i in range(probes):
         z = ("DE_LU", "FR", "PL")[i % 3]
         try:
-            client.query_day_ahead_prices(z, start=start, end=end)
-            return True                       # answered with data -> platform is up
-        except Exception as e:
-            if not any(s in str(e).lower() for s in DOWN):
-                return True                   # a non-outage error still means it's up
-            time.sleep(2)                     # brief gap, then try the next probe
-    return False                              # every probe hit a server-unavailable error
+            df = client.query_day_ahead_prices(z, start=start, end=end)
+            if df is not None:
+                return True                   # real response -> platform is up
+        except NoMatchingDataError:
+            return True                       # server answered, just no data -> up
+        except Exception:
+            pass                              # 503 / timeout / anything else -> not up
+        time.sleep(2)                         # brief gap, then try the next probe
+    return False                              # no probe confirmed the platform is up
 
 
 # ---------------------------------------------------------------------------
