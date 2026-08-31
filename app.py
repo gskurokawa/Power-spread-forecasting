@@ -103,14 +103,19 @@ st.markdown(
 PAIR = {"DE-PL": ("price_DE", "price_PL", "DE", "PL"),
         "DE-FR": ("price_DE", "price_FR", "DE", "FR")}
 
-def price_pair(prices, sp, since):
+def price_pair(prices, sp, since, until=None):
     """The two actual day-ahead price levels for a spread (e.g. DE and PL), from
-    `since` onward (hourly) so the x-range lines up with the spread chart beside it."""
+    `since` to `until` (hourly). Capping at `until` keeps the price chart's right
+    edge aligned with where the spread's actual ends, rather than running a day
+    ahead of it whenever prices publish before the forecast inputs do."""
     a, b, la, lb = PAIR[sp]
-    return prices[prices.index >= since][[a, b]].rename(columns={a: la, b: lb})
+    d = prices[prices.index >= since]
+    if until is not None and pd.notna(until):
+        d = d[d.index <= until]
+    return d[[a, b]].rename(columns={a: la, b: lb})
 
 # ----------------------------------------------------------------- spread: actual vs forecast
-WINDOW_DAYS = 7          # recent history shown in every chart, at hourly resolution
+WINDOW_DAYS = 100          # recent history shown in every chart, at hourly resolution
 
 def spread_series(pred_df, sp):
     d = pred_df[pred_df["spread"] == sp].set_index("timestamp").sort_index()
@@ -118,10 +123,11 @@ def spread_series(pred_df, sp):
     is_last = d.index.normalize() == last_day
     latest_mean = float(d.loc[is_last, "predicted"].mean())
     latest_has_actual = bool(d.loc[is_last, "actual"].notna().any())
+    actual_end = d.index[d["actual"].notna()].max()   # last hour with a realised actual
     cutoff = d.index.max() - pd.Timedelta(days=WINDOW_DAYS)
     d = d[d.index >= cutoff]                       # last WINDOW_DAYS, hourly
     chart = d[["actual", "predicted"]].rename(columns={"predicted": "forecast"})
-    return chart, latest_mean, last_day, latest_has_actual, cutoff
+    return chart, latest_mean, last_day, latest_has_actual, cutoff, actual_end
 
 pred_df, pred_src = load_predictions()
 prices, prices_src = load_prices()
@@ -131,15 +137,17 @@ prices, prices_src = load_prices()
 if pred_df is not None:
     for sp in ["DE-PL", "DE-FR"]:
         a, b, la, lb = PAIR[sp]
-        chart, latest, last_day, has_actual, cutoff = spread_series(pred_df, sp)
+        chart, latest, last_day, has_actual, cutoff, actual_end = spread_series(pred_df, sp)
 
         st.subheader(f"{sp}  ·  €/MWh")
         mcol, ccol = st.columns([1, 4])
-        mcol.metric(f"Midnight-to-midnight mean price spread forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
+        mcol.metric(f"Forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
         if has_actual:
-            ccol.caption(f"The noon power auction has cleared, so the actual is shown alongside).")
+            ccol.caption(f"Midnight-to-midnight mean predicted spread for {last_day.date()} "
+                         "(the auction has cleared, so the actual is shown alongside).")
         else:
-            ccol.caption(f"This is before the noon auction.")
+            ccol.caption(f"Pre-auction forecast for {last_day.date()}; the actual fills in "
+                         "once the day-ahead auction clears.")
 
         scol, pcol = st.columns(2)
         with scol:
@@ -148,7 +156,7 @@ if pred_df is not None:
         with pcol:
             st.markdown(f"**{la} and {lb} price levels — actual**")
             if prices is not None:
-                st.line_chart(price_pair(prices, sp, cutoff), height=280)
+                st.line_chart(price_pair(prices, sp, cutoff, actual_end), height=280)
             else:
                 st.info("Price levels unavailable (no modelling_table found).")
     st.caption(f"Data source: ENTSOE — predictions from **{pred_src}**"
