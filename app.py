@@ -49,6 +49,24 @@ def modelling_table_bytes():
                 return f.read(), "local file"
         return None, None
 
+# actual day-ahead price LEVELS for DE, FR, PL (from modelling_table), for the
+# price-levels overview chart. Neon first, committed CSV as a fallback.
+def load_prices():
+    cols = 'timestamp, "price_DE", "price_FR", "price_PL"'   # mixed-case cols need quoting
+    try:
+        conn = st.connection("neon", type="sql")
+        # only the range the charts use (predictions start in 2025) — avoids
+        # pulling the full 2018-onward history on every load
+        df = conn.query(f"SELECT {cols} FROM modelling_table WHERE timestamp >= '2024-01-01'", ttl="1h")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df.set_index("timestamp").sort_index(), "Neon · cloud Postgres"
+    except Exception:
+        if os.path.exists("modelling_table.csv"):
+            df = pd.read_csv("modelling_table.csv", index_col=0)
+            df.index = pd.to_datetime(df.index, utc=True)
+            return df[["price_DE", "price_FR", "price_PL"]].sort_index(), "local CSV (fallback)"
+        return None, None
+
 # ----------------------------------------------------------------- results (operational pre-auction walk-forward, 2025+)
 RESULTS = pd.DataFrame(
     [("DE-PL", "LASSO", "direct", 16.39, 25.82),
@@ -80,39 +98,64 @@ st.markdown(
     "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast before each day's auction with walk-forward machine-learning models."
 )
 
-# ----------------------------------------------------------------- TOP: actual vs predicted + latest forecast
-def spread_series(pred_df, sp, days):
+# ----------------------------------------------------------------- charts
+# each spread is paired with its two actual price levels (Germany + the neighbour)
+PAIR = {"DE-PL": ("price_DE", "price_PL", "DE", "PL"),
+        "DE-FR": ("price_DE", "price_FR", "DE", "FR")}
+
+def price_pair(prices, sp, since):
+    """The two actual day-ahead price levels for a spread (e.g. DE and PL), from
+    `since` onward (hourly) so the x-range lines up with the spread chart beside it."""
+    a, b, la, lb = PAIR[sp]
+    return prices[prices.index >= since][[a, b]].rename(columns={a: la, b: lb})
+
+# ----------------------------------------------------------------- spread: actual vs forecast
+WINDOW_DAYS = 7          # recent history shown in every chart, at hourly resolution
+
+def spread_series(pred_df, sp):
     d = pred_df[pred_df["spread"] == sp].set_index("timestamp").sort_index()
-    d = d[d.index >= d.index.max() - pd.Timedelta(days=days)]
     last_day = d.index.normalize().max()
     is_last = d.index.normalize() == last_day
-    chart = pd.DataFrame(index=d.index)
-    chart["actual"] = d["actual"]
-    chart["predicted"] = d["predicted"].where(~is_last)
-    chart["forecast (latest day)"] = d["predicted"].where(is_last)
     latest_mean = float(d.loc[is_last, "predicted"].mean())
     latest_has_actual = bool(d.loc[is_last, "actual"].notna().any())
-    return chart, latest_mean, last_day, latest_has_actual
+    cutoff = d.index.max() - pd.Timedelta(days=WINDOW_DAYS)
+    d = d[d.index >= cutoff]                       # last WINDOW_DAYS, hourly
+    chart = d[["actual", "predicted"]].rename(columns={"predicted": "forecast"})
+    return chart, latest_mean, last_day, latest_has_actual, cutoff
 
 pred_df, pred_src = load_predictions()
+prices, prices_src = load_prices()
+
+# Each row: the spread (actual vs forecast) on the left, the two actual price
+# levels on the right. No slider — every chart pans and zooms directly.
 if pred_df is not None:
-    days = st.slider("Select days of history to show using the slider:", min_value=14, max_value=180, value=60, step=7)
     for sp in ["DE-PL", "DE-FR"]:
-        chart, latest, last_day, has_actual = spread_series(pred_df, sp, days)
-        st.subheader(f"{sp} spread  ·  €/MWh")
-        mcol, ccol = st.columns([1, 5])
-        mcol.metric(f"Forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
+        a, b, la, lb = PAIR[sp]
+        chart, latest, last_day, has_actual, cutoff = spread_series(pred_df, sp)
+
+        st.subheader(f"{sp}  ·  €/MWh")
+        mcol, ccol = st.columns([1, 4])
+        mcol.metric(f"Midnight-to-midnight mean price spread forecast for {last_day.date()}", f"{latest:+.1f} €/MWh")
         if has_actual:
-            mcol.caption(f"Midnight-to-midnight mean predicted spread for {last_day.date()} "
-                         "(the auction has cleared, so the actual is shown alongside)")
+            ccol.caption(f"The noon power auction has cleared, so the actual is shown alongside).")
         else:
-            mcol.caption(f"Pre-auction forecast for {last_day.date()}; the actual fills in "
-                         "once the day-ahead auction clears")
-        ccol.line_chart(chart, height=260)
-    st.caption(f"Data source: ENTSOE from **{pred_src}**")
+            ccol.caption(f"This is before the noon auction.")
+
+        scol, pcol = st.columns(2)
+        with scol:
+            st.markdown("**Spread — actual vs forecast**")
+            st.line_chart(chart, height=280)
+        with pcol:
+            st.markdown(f"**{la} and {lb} price levels — actual**")
+            if prices is not None:
+                st.line_chart(price_pair(prices, sp, cutoff), height=280)
+            else:
+                st.info("Price levels unavailable (no modelling_table found).")
+    st.caption(f"Data source: ENTSOE — predictions from **{pred_src}**"
+               + (f", prices from **{prices_src}**" if prices is not None else ""))
 else:
-    st.info("No predictions available yet — load `predictions` into Neon (or generate "
-            "`predictions.csv` with `python spread_forecasting.py compare`), then reload.")
+    st.info("No predictions available yet — load `predictions` into Neon "
+            "(or generate `predictions.csv`), then reload.")
 
 st.divider()
 
@@ -169,17 +212,11 @@ if os.path.exists("shap_ranking_preauction.csv"):
     tbl = pd.DataFrame({
         "Driver": rank.index,
         "What it is": [DRIVER_DESC.get(f, "—") for f in rank.index],
-        "mean |SHAP| (€/MWh)": rank.iloc[:, 0].to_numpy(),
-    })
-    tcol, bcol = st.columns([5, 2])          # narrow table on the left, bar chart on the right
+    })                                        # magnitude column dropped — the bar chart shows it
+    tcol, bcol = st.columns([5, 2])          # table on the left, bar chart on the right
     with tcol:
         st.subheader("Top drivers")
-        st.dataframe(
-            tbl, hide_index=True, use_container_width=True,
-            column_config={
-                "mean |SHAP| (€/MWh)": st.column_config.NumberColumn(format="%.2f"),
-            },
-        )
+        st.dataframe(tbl, hide_index=True, use_container_width=True)
     with bcol:
         show_image("shap_bar_preauction.png", "Global driver importance (mean |SHAP|).")
 else:
