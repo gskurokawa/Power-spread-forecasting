@@ -1,26 +1,16 @@
 name: Daily spread update
 
 # WHEN this runs.
+#
+# Scheduling is external: cron-job.org POSTs to the GitHub API workflow_dispatch
+# endpoint each morning, before the day-ahead gate closure (noon local time), so the
+# operational model writes a genuine pre-auction forecast. GitHub's own scheduled
+# (cron) trigger is NOT used — it fired late or was silently dropped — so
+# workflow_dispatch is the sole trigger. The run happens 7 days a week (the auction
+# runs every day), and the 10-day refetch means a missed or late run loses nothing.
 on:
-  # Scheduled: 08:00 UTC, every day. The operational model forecasts BEFORE the
-  # day-ahead auction, so this must run ahead of gate closure (noon local time):
-  # 08:00 UTC is 10:00 CEST in summer and 09:00 CET in winter, comfortably before
-  # the ~10:00 UTC (summer) / 11:00 UTC (winter) gate closure year-round. With the
-  # 45-minute timeout below, a run started at 08:00 UTC always finishes before the
-  # auction clears, so the forecast it writes genuinely precedes the market.
-  #
-  # Every day, not just weekdays: the day-ahead auction runs 7 days a week, so a
-  # weekend forecast is a real forecast. ENTSO-E is flakier at weekends, but the
-  # fetch retries and the updater's 10-day refetch buffer absorb transient misses,
-  # and yesterday's still-NULL actual is backfilled once its auction has cleared.
-  #
-  # Note: this yields a true next-day (no-actual) forecast only when ENTSO-E has
-  # already published tomorrow's day-ahead forecasts by run time. When it has not,
-  # the run forecasts up to today and tomorrow is picked up on a later run; the
-  # 10-day refetch means nothing is lost either way.
-  schedule:
-    - cron: "0 8 * * *"
-  # Manual button in the Actions tab — use this to test on demand.
+  # The dispatch target cron-job.org calls, and the manual "Run workflow" button in
+  # the Actions tab.
   workflow_dispatch:
 
 # Never let two runs overlap (a slow run must finish before the next starts).
