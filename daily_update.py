@@ -46,6 +46,7 @@ REQUIREMENTS
 
 import os
 import sys
+import time
 import argparse
 import tempfile
 import datetime as dt
@@ -100,6 +101,32 @@ def load_env():
         raise SystemExit(f"Missing environment variable(s): {', '.join(missing)}. "
                          "Put them in a local .env or set them in the shell.")
     return api_key, db_url
+
+
+# ---------------------------------------------------------------------------
+# 0b. circuit breaker — fast ENTSO-E health check
+# ---------------------------------------------------------------------------
+def entsoe_reachable(api_key, probes=3):
+    """Quick pre-flight so a total ENTSO-E outage aborts in seconds instead of
+    grinding every endpoint's retries for ~25 minutes. Fires a few tiny day-ahead
+    price probes with NO retries; returns True the moment one responds (a 'no data'
+    reply still means the server is up), and False only if every probe hits a
+    server-unavailable error (503 / 502 / 504 / timeout / connection)."""
+    from entsoe import EntsoePandasClient
+    client = EntsoePandasClient(api_key=api_key, retry_count=0, timeout=20)
+    end = pd.Timestamp.now(tz="UTC")
+    start = end - pd.Timedelta(days=1)
+    DOWN = ("503", "502", "504", "timed out", "timeout", "connection", "temporarily")
+    for i in range(probes):
+        z = ("DE_LU", "FR", "PL")[i % 3]
+        try:
+            client.query_day_ahead_prices(z, start=start, end=end)
+            return True                       # answered with data -> platform is up
+        except Exception as e:
+            if not any(s in str(e).lower() for s in DOWN):
+                return True                   # a non-outage error still means it's up
+            time.sleep(2)                     # brief gap, then try the next probe
+    return False                              # every probe hit a server-unavailable error
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +438,17 @@ def main():
               "for the full history; this run will only add a recent window.")
     window_end = (now + pd.Timedelta(days=FORWARD_DAYS)).normalize()
     print(f"Fetch window: {window_start.date()} -> {window_end.date()}  (buffer {args.buffer_days}d)")
+
+    # -- circuit breaker: bail out fast if ENTSO-E is down ------------------
+    print("\n[0/4] checking ENTSO-E availability ...")
+    if not entsoe_reachable(api_key):
+        print("  ENTSO-E is not responding — every health probe returned a "
+              "server-unavailable error. This is an upstream outage, not a pipeline "
+              "error. Skipping this run: nothing is fetched or written, and the next "
+              "run's 10-day refetch will fill the gap.")
+        sys.exit(0)     # graceful no-op; change to sys.exit(1) if you would rather
+                        # the run show as a red failure when ENTSO-E is down
+    print("  ENTSO-E is up — proceeding.")
 
     # -- fetch + transform --------------------------------------------------
     import time as _time
