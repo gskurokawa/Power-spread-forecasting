@@ -115,7 +115,7 @@ def price_pair(prices, sp, since, until=None):
     return d[[a, b]].rename(columns={a: la, b: lb})
 
 # ----------------------------------------------------------------- spread: actual vs forecast
-WINDOW_DAYS = 100          # recent history shown in every chart, at hourly resolution
+WINDOW_DAYS = 7            # recent history shown in every chart, at hourly resolution
 
 def spread_series(pred_df, sp):
     d = pred_df[pred_df["spread"] == sp].set_index("timestamp").sort_index()
@@ -152,7 +152,8 @@ if pred_df is not None:
         scol, pcol = st.columns(2)
         with scol:
             st.markdown("**Spread — actual vs forecast**")
-            st.line_chart(chart, height=280)
+            # columns are ["actual", "forecast"] -> light grey actual, red forecast
+            st.line_chart(chart, height=280, color=["#b0b0b0", "#d62728"])
         with pcol:
             st.markdown(f"**{la} and {lb} price levels — actual**")
             if prices is not None:
