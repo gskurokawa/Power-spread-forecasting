@@ -80,6 +80,6 @@ A FastAPI service serves the forecasts and SHAP drivers over HTTP
 
 ![API endpoints](docs/img/api-docs.png)
 
-Example live response from `/drivers`:
+Example live response from `/spreads`:
 
 ![Drivers response](docs/img/api-response.png)
