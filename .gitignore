@@ -17,3 +17,6 @@ mlflow.db
 .DS_Store
 .vscode/
 *.zip
+
+# Virtual environment
+.venv/

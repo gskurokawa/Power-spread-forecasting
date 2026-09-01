@@ -72,3 +72,14 @@ daily refresh) use `requirements-daily.txt`.
   cross-validation, tracked in MLflow.
 - **Evaluation**: rolling two-year window, retrained monthly, tested out-of-sample; MAE / RMSE
   with Diebold–Mariano tests under a Newey–West HAC variance.
+
+## API
+
+A FastAPI service serves the forecasts and SHAP drivers over HTTP
+(`uvicorn api.main:app`). Interactive docs at `/docs`:
+
+![API endpoints](docs/img/api-docs.png)
+
+Example live response from `/drivers`:
+
+![Drivers response](docs/img/api-response.png)
