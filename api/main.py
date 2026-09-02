@@ -32,7 +32,7 @@ except Exception:  # sqlalchemy optional when running purely off the CSV fallbac
     Engine = object       # type: ignore
 
 # spread code <-> short label used by the dashboard
-SPREADS = {"DE-PL": "spread_DE_PL", "DE-FR": "spread_DE_FR"}
+SPREADS = {"DE-PL": "DE-PL", "DE-FR": "DE-FR"}
 CODE_BY_DB = {v: k for k, v in SPREADS.items()}
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
