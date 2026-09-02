@@ -1,0 +1,23 @@
+# FastAPI service image — small, serves forecasts from Postgres.
+# Build:  docker build -f Dockerfile.api -t power-spread-api .
+# Run:    docker run -p 8000:8000 -e DATABASE_URL=... power-spread-api
+FROM python:3.12-slim
+
+# don't write .pyc, flush logs immediately
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# install deps first so this layer is cached across code changes
+COPY api/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# app code (and the SHAP ranking CSV the /drivers endpoint reads)
+COPY api/ ./api/
+COPY shap_ranking_preauction.csv ./shap_ranking_preauction.csv
+
+EXPOSE 8000
+
+# Container Apps / most PaaS inject $PORT; default to 8000 locally.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
