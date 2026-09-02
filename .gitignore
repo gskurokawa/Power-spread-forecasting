@@ -20,3 +20,12 @@ mlflow.db
 
 # Virtual environment
 .venv/
+
+# Airflow
+airflow/.env
+**/.env
+
+# Airflow runtime scratch (keep dags/ + README + compose)
+airflow/logs/
+airflow/plugins/
+airflow/config/
