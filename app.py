@@ -145,6 +145,9 @@ if pred_df is not None:
         with scol:
             st.markdown(f"**Power price spread ({la} minus {lb}) — actual vs forecast "
                         f"(midnight-to-midnight of the day after {fmade})**")
+            st.markdown(f"There are frequent issues downloading entsoe data.")
+            st.markdown(f"Straight lines are used where data downloads are missing.")
+            st.markdown(f"If last forecast date = last actual date, today's data was not available.")         
             # columns are ["actual", "forecast"] -> light grey actual, red forecast
             st.line_chart(chart, height=280, color=["#b0b0b0", "#d62728"])
         with pcol:

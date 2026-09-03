@@ -29,3 +29,5 @@ airflow/.env
 airflow/logs/
 airflow/plugins/
 airflow/config/
+
+.devcontainer/
