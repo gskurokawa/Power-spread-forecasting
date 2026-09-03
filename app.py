@@ -97,10 +97,11 @@ st.title("⚡ Forecasts of Selected European Power Price Spreads")
 st.markdown(
     "Day-ahead Germany–Poland (DE-PL) and Germany–France (DE-FR) price spreads, forecast before each day's auction with walk-forward machine-learning models."
 )
-st.markdown(f"There are frequent issues downloading entsoe data.")
-st.markdown(f"Straight lines are used where data downloads are missing.")
-st.markdown(f"If last forecast price spread date = last actual price spread date, today's data was not available.")         
-            
+st.markdown(
+    "- There are frequent issues downloading ENTSO-E data.\n"
+    "- Straight lines are used where data downloads are missing.\n"
+    "- If last forecast price spread date = last actual price spread date, today's data was not available."
+)            
 # ----------------------------------------------------------------- charts
 # each spread is paired with its two actual price levels (Germany + the neighbour)
 PAIR = {"DE-PL": ("price_DE", "price_PL", "DE", "PL"),
