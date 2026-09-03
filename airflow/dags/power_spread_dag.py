@@ -78,7 +78,7 @@ def verify_freshness(**_):
 with DAG(
     dag_id="power_spread_daily",
     description="Daily pre-auction DE-PL / DE-FR spread forecast",
-    schedule="7 8 * * *",          # ~before the day-ahead gate closure (UTC)
+    schedule="2 10 * * *",          # ~before the day-ahead gate closure (UTC)
     start_date=datetime(2026, 1, 1),
     catchup=False,                 # don't backfill missed days
     max_active_runs=1,             # never overlap runs (the old concurrency guard)
