@@ -340,7 +340,7 @@ def upsert_window(engine, window, window_start, dry_run):
         conn.execute(text("DELETE FROM modelling_table WHERE timestamp >= :ws"),
                      {"ws": window_start.to_pydatetime()})
         window.to_sql("modelling_table", conn, if_exists="append",
-                      index=True, index_label="timestamp", chunksize=500, method="multi")
+                      index=True, index_label="timestamp", chunksize=200, method="multi")
     print(f"  modelling_table: replaced rows >= {window_start.date()} "
           f"({len(window)} rows written)")
 
@@ -412,7 +412,7 @@ def upsert_predictions(engine, preds, pred_from, dry_run):
         conn.execute(text("DELETE FROM predictions WHERE timestamp >= :pf"),
                      {"pf": pred_from.to_pydatetime()})
         preds.reset_index().to_sql("predictions", conn, if_exists="append",
-                                   index=False, chunksize=500, method="multi")
+                                   index=False, chunksize=200, method="multi")
     print(f"  predictions: replaced rows >= {pred_from.date()} ({len(preds)} rows written)")
 
 
