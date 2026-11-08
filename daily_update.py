@@ -340,7 +340,7 @@ def upsert_window(engine, window, window_start, dry_run):
         conn.execute(text("DELETE FROM modelling_table WHERE timestamp >= :ws"),
                      {"ws": window_start.to_pydatetime()})
         window.to_sql("modelling_table", conn, if_exists="append",
-                      index=True, index_label="timestamp", chunksize=2000, method="multi")
+                      index=True, index_label="timestamp", chunksize=500, method="multi")
     print(f"  modelling_table: replaced rows >= {window_start.date()} "
           f"({len(window)} rows written)")
 
