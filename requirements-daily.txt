@@ -12,3 +12,4 @@ entsoe-py>=0.6
 SQLAlchemy>=2.0
 psycopg2-binary>=2.9
 python-dotenv>=1.0
+psycopg[binary]
