@@ -412,7 +412,7 @@ def upsert_predictions(engine, preds, pred_from, dry_run):
         conn.execute(text("DELETE FROM predictions WHERE timestamp >= :pf"),
                      {"pf": pred_from.to_pydatetime()})
         preds.reset_index().to_sql("predictions", conn, if_exists="append",
-                                   index=False, chunksize=2000, method="multi")
+                                   index=False, chunksize=500, method="multi")
     print(f"  predictions: replaced rows >= {pred_from.date()} ({len(preds)} rows written)")
 
 
