@@ -336,6 +336,11 @@ def upsert_window(engine, window, window_start, dry_run):
               f"with {len(window)} fresh rows")
         return
     window = merge_with_existing(engine, window, window_start)   # never null-out good data
+    # psycopg3 sends an all-empty column as text, which the database rejects for number
+    # columns. Convert every non-numeric column to numbers (empty stays empty).
+    for c in window.columns:
+        if not pd.api.types.is_numeric_dtype(window[c]):
+            window[c] = pd.to_numeric(window[c], errors="coerce")
     with engine.begin() as conn:      # single transaction: delete + append atomic
         conn.execute(text("DELETE FROM modelling_table WHERE timestamp >= :ws"),
                      {"ws": window_start.to_pydatetime()})
