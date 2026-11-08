@@ -27,7 +27,8 @@ def load_predictions():
         df = conn.query("SELECT timestamp, spread, actual, predicted FROM predictions", ttl="1h")
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         return _norm_spread(df), "Neon · cloud Postgres"
-    except Exception:
+    except Exception as e:
+        st.error(f"Database read failed: {type(e).__name__}: {e}")
         if os.path.exists("predictions.csv"):
             return _norm_spread(pd.read_csv("predictions.csv", parse_dates=["timestamp"])), "local CSV (fallback)"
         return None, None
